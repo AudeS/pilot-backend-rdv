@@ -1,0 +1,2 @@
+# Aucune dépendance : le backend n'utilise que la bibliothèque standard Python.
+# Ce fichier existe pour que Render détecte le runtime Python.

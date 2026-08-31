@@ -1,0 +1,22 @@
+# Blueprint Render (optionnel : on peut aussi tout créer à la main dans le
+# dashboard Render, voir le guide PDF). Les secrets (sync: false) sont à
+# coller dans l'interface Render, jamais dans ce fichier.
+services:
+  - type: web
+    name: widget-rdv-api        # ← choisissez votre nom (donne l'URL xxx.onrender.com)
+    runtime: python
+    plan: free                  # free pour tester → starter (~7 $/mois) pour du 24/7 sans veille
+    startCommand: python rdv_api.py
+    envVars:
+      - key: CAL_API_KEY
+        sync: false             # à coller dans Render → Environment (secret)
+      - key: CAL_EVENT_TYPE_ID
+        sync: false
+      - key: NTFY_TOPIC
+        sync: false             # topic secret : ne pas le committer
+      - key: NOTIF_TZ
+        value: "Europe/Paris"
+      - key: EVENT_TITRE
+        value: "Appel découverte"
+      - key: EVENT_DUREE_MIN
+        value: "30"
