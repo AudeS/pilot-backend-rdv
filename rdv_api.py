@@ -34,6 +34,7 @@ Endpoints (CORS ouvert : le widget peut appeler depuis n'importe quel domaine) :
   POST /api/rdv/book                → {slot, name, email, tel, answers}
   POST /api/optin                   → {prenom, email, tel, page, utm}
 """
+import hashlib
 import json
 import os
 import re
@@ -149,6 +150,66 @@ def source_label(utm):
     if "manuel" in blob or "direct" in blob:
         return "Direct / manuel"
     return "Facebook"  # fbclid, fb/meta, ou aucun signal → défaut
+
+
+# ------------------------------------------------ Meta Conversions API
+# Envoi SERVEUR de l'évènement "Lead" à Meta, en complément du pixel client.
+# Pourquoi : le pixel du navigateur (lp.html/merci.html) ne se déclenche que si
+# le visiteur clique "Accepter" sur le bandeau cookies — et sur la page "C'est
+# réservé", une fois l'objectif atteint, beaucoup ne cliquent jamais ce bandeau.
+# Le rendez-vous est pourtant bien réel. Ce chemin serveur est indépendant du
+# navigateur/bloqueur de pub/bandeau : c'est la méthode que Meta recommande
+# pour ce cas précis (voir doctrine média buying, "erreur n°10").
+META_PIXEL_ID = os.environ.get("META_PIXEL_ID", "1295267600331261")
+META_CAPI_TOKEN = os.environ.get("META_CAPI_TOKEN", "")
+
+
+def _hash_meta(valeur):
+    return hashlib.sha256(valeur.strip().lower().encode("utf-8")).hexdigest()
+
+
+def meta_lead(p, headers=None, client_ip=None):
+    """Miroir serveur de la logique client (widget-rdv.js, rendOk()) : jamais
+    pour un test du propriétaire, jamais pour un lead hors cible (réponse
+    chiffre d'affaires = "pas encore vendu" → même logique que la redirection
+    vers merci-attente.html côté front, qui elle non plus ne déclenche pas Lead)."""
+    if not META_PIXEL_ID or not META_CAPI_TOKEN:
+        return
+    if est_test(p.get("name", ""), p.get("email", ""), p.get("tel", "")):
+        return
+    ca = (p.get("answers") or {}).get("chiffre-affaires") or ""
+    if re.search(r"pas encore vendu", ca, re.I):
+        return
+    user_data = {}
+    if p.get("email"):
+        user_data["em"] = [_hash_meta(p["email"])]
+    if p.get("tel"):
+        tel_digits = re.sub(r"\D", "", p["tel"])
+        if tel_digits:
+            user_data["ph"] = [_hash_meta(tel_digits)]
+    if client_ip:
+        user_data["client_ip_address"] = client_ip
+    if headers and headers.get("User-Agent"):
+        user_data["client_user_agent"] = headers.get("User-Agent")
+    corps = {"data": [{
+        "event_name": "Lead",
+        "event_time": int(datetime.now(timezone.utc).timestamp()),
+        "action_source": "website",
+        "event_source_url": "https://pilot-aude-lp.netlify.app/merci.html",
+        "user_data": user_data,
+    }]}
+    try:
+        req = urllib.request.Request(
+            "https://graph.facebook.com/v21.0/%s/events" % META_PIXEL_ID,
+            data=json.dumps(corps).encode(), method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + META_CAPI_TOKEN})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            rep = json.loads(r.read().decode())
+            if not rep.get("events_received"):
+                sys.stderr.write("[rdv] Meta CAPI : réponse inattendue %s\n" % rep)
+    except Exception as e:
+        sys.stderr.write("[rdv] Meta CAPI erreur : %s\n" % e)
 
 
 # Bruit de test à ne PAS enregistrer/notifier (vos propres tests via le widget).
@@ -757,6 +818,9 @@ class Handler(SimpleHTTPRequestHandler):
                 upsert_lead(p, "reserve")
                 # notif "Nouveau rendez-vous" envoyée par veilleur_nouveaux_rdv (poll
                 # cal.com) : plus fiable que dans la requête (cold start Render).
+                ip_client = (self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                             or (self.client_address[0] if self.client_address else None))
+                meta_lead(p, headers=self.headers, client_ip=ip_client)
                 return self._json(200, {"ok": True, "cal": rep.get("status")})
             except urllib.error.HTTPError as e:
                 detail = e.read().decode()[:400]
