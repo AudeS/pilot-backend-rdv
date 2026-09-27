@@ -180,24 +180,43 @@ def meta_lead(p, headers=None, client_ip=None):
     ca = (p.get("answers") or {}).get("chiffre-affaires") or ""
     if re.search(r"pas encore vendu", ca, re.I):
         return
-    user_data = {}
+    user_data = {"country": [_hash_meta("fr")]}
     if p.get("email"):
         user_data["em"] = [_hash_meta(p["email"])]
     if p.get("tel"):
         tel_digits = re.sub(r"\D", "", p["tel"])
         if tel_digits:
             user_data["ph"] = [_hash_meta(tel_digits)]
+    morceaux = (p.get("name") or "").split()
+    if morceaux:
+        user_data["fn"] = [_hash_meta(morceaux[0])]
+    if len(morceaux) > 1:
+        user_data["ln"] = [_hash_meta(" ".join(morceaux[1:]))]
+    # fbc (clic sur la pub, via fbclid) et fbp (cookie pixel) : c'est ce qui relie
+    # le rendez-vous à la pub cliquée dans le Gestionnaire de pubs. Jamais hachés.
+    fbc = p.get("fbc") or ""
+    fbclid = (p.get("utm") or {}).get("fbclid") or ""
+    if not fbc and fbclid:
+        fbc = "fb.1.%d.%s" % (int(datetime.now(timezone.utc).timestamp() * 1000), fbclid)
+    if fbc:
+        user_data["fbc"] = fbc
+    if p.get("fbp"):
+        user_data["fbp"] = p["fbp"]
     if client_ip:
         user_data["client_ip_address"] = client_ip
     if headers and headers.get("User-Agent"):
         user_data["client_user_agent"] = headers.get("User-Agent")
-    corps = {"data": [{
+    evt = {
         "event_name": "Lead",
         "event_time": int(datetime.now(timezone.utc).timestamp()),
         "action_source": "website",
-        "event_source_url": "https://pilot-aude-lp.netlify.app/merci.html",
+        "event_source_url": p.get("url") or "https://pilot-aude-lp.netlify.app/",
         "user_data": user_data,
-    }]}
+    }
+    # même event_id que le Lead navigateur de merci.html → dédoublonné par Meta
+    if p.get("event_id"):
+        evt["event_id"] = p["event_id"]
+    corps = {"data": [evt]}
     try:
         req = urllib.request.Request(
             "https://graph.facebook.com/v21.0/%s/events" % META_PIXEL_ID,
