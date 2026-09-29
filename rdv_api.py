@@ -94,7 +94,9 @@ except Exception:
     TZ_PROPRIO = timezone(timedelta(hours=int(os.environ.get("NOTIF_TZ_OFFSET", "1"))))
 
 
-def notifier(titre, corps, tags="warning", priorite="high"):
+def notifier(titre, corps, tags="warning", priorite="high", clic=None, actions=None):
+    """clic : URL ouverte en touchant la notif ; actions : liste de
+    (libellé ASCII, URL) → boutons sous la notif. URL déjà encodées (ASCII)."""
     if not NTFY_TOPIC:
         return False
     try:
@@ -105,15 +107,58 @@ def notifier(titre, corps, tags="warning", priorite="high"):
         except UnicodeEncodeError:
             from email.header import Header
             titre = Header(titre, "utf-8").encode()
+        entetes = {"Title": titre, "Tags": tags, "Priority": priorite}
+        if clic:
+            entetes["Click"] = clic
+        if actions:
+            entetes["Actions"] = "; ".join(
+                "view, %s, %s, clear=true" % (lib, url) for lib, url in actions)
         req = urllib.request.Request(
             "https://ntfy.sh/" + NTFY_TOPIC,
             data=corps.encode("utf-8"), method="POST",
-            headers={"Title": titre, "Tags": tags, "Priority": priorite})
+            headers=entetes)
         urllib.request.urlopen(req, timeout=10)
         return True
     except Exception as e:
         sys.stderr.write("[rdv] notification impossible : %s\n" % e)
         return False
+
+
+# Message WhatsApp pré-rempli pour relancer un lead incomplet (clic sur la notif).
+MSG_RELANCE_WA = """Bonjour{prenom} 👋
+
+C'est Aude, de PILOT. Tu as commencé à t'inscrire après avoir vu ma masterclass, mais ta demande n'est pas allée jusqu'au bout. Je préfère te contacter directement plutôt que de laisser ça en suspens.
+
+Si tu es arrivé(e) jusque-là, c'est sûrement que quelque chose t'a parlé : les journées à rallonge, l'énergie en dents de scie, la sensation de tenir ton entreprise à bout de bras sans prendre le temps de te piloter toi-même.
+
+Je te propose un audit focus offert de 30 minutes. Ensemble, on passe en revue ton énergie, ton mental et ton rythme, on identifie ce qui te freine aujourd'hui, et tu repars avec une vision claire de tes priorités. Aucun engagement : si PILOT n'est pas fait pour toi, je te le dirai franchement.
+
+Tu préfères plutôt en début de semaine ou en fin de semaine ? Et plutôt le matin ou l'après-midi ?
+
+À très vite,
+Aude"""
+
+
+def tel_international(tel):
+    """'06 12 34 56 78' / '+33 6…' / '0033 6…' → '33612345678' (format wa.me)."""
+    t = (tel or "").strip()
+    chiffres = re.sub(r"\D", "", t)
+    if chiffres.startswith("00"):
+        return chiffres[2:]
+    if t.startswith("+"):
+        return chiffres
+    if len(chiffres) == 10 and chiffres.startswith("0"):
+        return "33" + chiffres[1:]  # numéro français sans indicatif
+    return chiffres
+
+
+def lien_whatsapp_relance(tel, nom=""):
+    num = tel_international(tel)
+    if len(num) < 8:
+        return None
+    prenom = (nom or "").split()[0].capitalize() if (nom or "").split() else ""
+    texte = MSG_RELANCE_WA.format(prenom=(" " + prenom) if prenom else "")
+    return "https://wa.me/%s?text=%s" % (num, urllib.parse.quote(texte, safe=""))
 
 
 JOURS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -329,7 +374,14 @@ def veilleur_leads():
                     corps += "\n📍 Source : " + source_label(l.get("utm"))
                     if l.get("slot"):
                         corps += "\n📅 visait " + format_slot_fr(l["slot"])
-                    if notifier("Lead incomplet à rappeler", corps):
+                    wa = lien_whatsapp_relance(l.get("tel"), l.get("name"))
+                    actions = None
+                    if wa:
+                        corps += "\n👉 Touche la notif pour lui écrire sur WhatsApp"
+                        actions = [("WhatsApp", wa),
+                                   ("Appeler", "tel:+" + tel_international(l.get("tel")))]
+                    if notifier("Lead incomplet à rappeler", corps,
+                                clic=wa, actions=actions):
                         l["notifie"] = dt.now(timezone.utc).isoformat()
                         modifie = True
                 if modifie:
