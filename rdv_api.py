@@ -131,7 +131,7 @@ C'est Aude, de PILOT. Tu as commencé à t'inscrire après avoir vu ma mastercla
 
 Si tu es arrivé(e) jusque-là, c'est sûrement que quelque chose t'a parlé : les journées à rallonge, l'énergie en dents de scie, la sensation de tenir ton entreprise à bout de bras sans prendre le temps de te piloter toi-même.
 
-Je te propose un audit focus offert de 30 minutes. Ensemble, on passe en revue ton énergie, ton mental et ton rythme, on identifie ce qui te freine aujourd'hui, et tu repars avec une vision claire de tes priorités. Aucun engagement : si PILOT n'est pas fait pour toi, je te le dirai franchement.
+Je te propose un bilan offert de 30 minutes. Ensemble, on passe en revue ton énergie, ton mental et ton rythme, on identifie ce qui te freine aujourd'hui, et tu repars avec une vision claire de tes priorités. Aucun engagement : si PILOT n'est pas fait pour toi, je te le dirai franchement.
 
 Tu préfères plutôt en début de semaine ou en fin de semaine ? Et plutôt le matin ou l'après-midi ?
 
