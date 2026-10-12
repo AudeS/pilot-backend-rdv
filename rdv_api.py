@@ -455,11 +455,15 @@ def veilleur_rappels():
 # ---------------------------------------- détecteur de nouveaux RDV (robuste)
 # Filet indépendant de la requête /book : poll cal.com toutes les 90 s et notifie
 # tout RDV à venir jamais annoncé. Rattrape les notifs perdues (cold start Render).
-# 1er passage (fichier absent / instance neuve) : seed SILENCIEUX pour ne pas
-# re-spammer les RDV existants à chaque redémarrage.
+# 1er passage (fichier absent / instance neuve) : seed silencieux des RDV
+# ANCIENS, mais les résas créées dans la fenêtre récente sont annoncées. Le disque
+# Render gratuit est effacé à chaque réveil/redémarrage : sans ça, une résa prise
+# pendant le réveil du serveur était marquée « vue » sans jamais être notifiée.
 # Anti-doublon par le temps : on n'annonce QUE les résas créées récemment. Une résa
 # plus ancienne jamais vue (ex. dédup perdue au redémarrage) est marquée vue sans notif.
 FENETRE_NOUVEAU_S = 30 * 60
+# Réveil immédiat du veilleur (webhook cal.com BOOKING_CREATED) au lieu d'attendre 90 s.
+REVEIL_RDV = threading.Event()
 
 
 def veilleur_nouveaux_rdv():
@@ -473,11 +477,20 @@ def veilleur_nouveaux_rdv():
                 vus = set()
             bookings = bookings_a_venir()
             if premier:
-                vus |= {b["id"] for b in bookings}
+                # seed silencieux des seules résas ANCIENNES ; les récentes
+                # restent « non vues » et sont annoncées juste en dessous
+                maintenant = datetime.now(timezone.utc)
+                for b in bookings:
+                    try:
+                        t = datetime.fromisoformat(str(b.get("created")).replace("Z", "+00:00"))
+                        if (maintenant - t).total_seconds() > FENETRE_NOUVEAU_S:
+                            vus.add(b["id"])
+                    except Exception:
+                        vus.add(b["id"])
                 with open(VUS_FILE, "w", encoding="utf-8") as f:
                     json.dump(sorted(vus), f)
                 premier = False
-            else:
+            if True:
                 maintenant = datetime.now(timezone.utc)
                 for b in bookings:
                     if est_test(b.get("name", ""), b.get("email", ""), b.get("tel", "")):
@@ -509,7 +522,24 @@ def veilleur_nouveaux_rdv():
                             json.dump(sorted(vus), f)
         except Exception as e:
             sys.stderr.write("[rdv] nouveaux rdv : %s\n" % e)
-        threading.Event().wait(90)
+        REVEIL_RDV.wait(90)
+        REVEIL_RDV.clear()
+
+
+# ------------------------------------------------ anti-veille (Render gratuit)
+# Render gratuit endort le service après 15 min sans requête entrante : les
+# veilleurs (nouveaux RDV, rappel 1 h avant) s'arrêtent avec lui. On se ping
+# soi-même par l'URL publique toutes les 10 min pour rester éveillé.
+def veilleur_eveil():
+    url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not url:
+        return
+    while True:
+        threading.Event().wait(10 * 60)
+        try:
+            urllib.request.urlopen(url + "/api/rdv/ping", timeout=30).read()
+        except Exception as e:
+            sys.stderr.write("[rdv] anti-veille : %s\n" % e)
 
 
 # ------------------------------------------------------- règles (mode mock)
@@ -807,6 +837,8 @@ class Handler(SimpleHTTPRequestHandler):
             if EST_PROD:
                 return self._json(404, {"erreur": "not found"})
             return super().do_GET()
+        if self.path.startswith("/api/rdv/ping"):
+            return self._json(200, {"ok": True})
         if self.path.startswith("/api/rdv/config"):
             questions = QUESTIONS_MOCK
             if MODE == "cal":
@@ -842,6 +874,12 @@ class Handler(SimpleHTTPRequestHandler):
                 p = json.loads(brut.decode("latin-1"))
         except Exception:
             return self._json(400, {"erreur": "corps invalide"})
+
+        # webhook cal.com (BOOKING_CREATED) : réveille le serveur s'il dormait et
+        # lance tout de suite le veilleur, qui envoie la notif (source unique)
+        if self.path.startswith("/api/rdv/calwebhook"):
+            REVEIL_RDV.set()
+            return self._json(200, {"ok": True})
 
         # opt-in : base e-mails pour les relances (newsletter, masterclass…)
         if self.path.startswith("/api/optin"):
@@ -930,9 +968,11 @@ if __name__ == "__main__":
         threading.Thread(target=veilleur_leads, daemon=True).start()
         threading.Thread(target=veilleur_rappels, daemon=True).start()
         threading.Thread(target=veilleur_nouveaux_rdv, daemon=True).start()
+        threading.Thread(target=veilleur_eveil, daemon=True).start()
         print("Veilleur leads incomplets : actif (scan 60 s)")
         print("Rappel perso 1 h avant chaque call : actif (scan 2 min)")
-        print("Détecteur de nouveaux RDV : actif (poll 90 s)")
+        print("Détecteur de nouveaux RDV : actif (poll 90 s + webhook cal.com)")
+        print("Anti-veille : ping toutes les 10 min")
     else:
         print("(pas de NTFY_TOPIC : notifications désactivées)")
     try:
